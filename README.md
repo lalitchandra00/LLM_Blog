@@ -1,2 +1,200 @@
-# LLM_Blog
-A practice project exploring LangGraph by building a graph-based LLM workflow with two nodes for blog outline generation and content creation.
+# LLM Blog
+
+A practice project for learning how to build a multi-step LLM workflow with
+[LangGraph](https://langchain-ai.github.io/langgraph/). The workflow takes a
+blog title, creates an outline, writes the blog, and then evaluates the
+generated content.
+
+The complete implementation is in [`llm.ipynb`](./llm.ipynb).
+
+## What the workflow does
+
+The notebook builds this pipeline:
+
+```text
+START
+  |
+  v
+Create outline
+  |
+  v
+Write blog
+  |
+  v
+Evaluate blog (0-10)
+  |
+  v
+END
+```
+
+![Workflow diagram](./Workflow.png)
+
+Each step receives the current workflow state, performs one LLM call, updates
+the state, and passes it to the next step.
+
+## Project structure
+
+| File | Purpose |
+| --- | --- |
+| [`llm.ipynb`](./llm.ipynb) | Defines and runs the LangGraph workflow |
+| [`Workflow.png`](./Workflow.png) | Visual representation of the workflow |
+| [`requirements.txt`](./requirements.txt) | Python dependencies |
+| `.env` | Stores the Google API key locally; do not commit this file |
+
+## How it works, step by step
+
+### 1. Import the libraries
+
+The notebook imports:
+
+- `StateGraph`, `START`, and `END` from LangGraph to create the workflow.
+- `ChatGoogleGenerativeAI` to call the Google Gemini model.
+- `TypedDict` to define the state shape.
+- `BaseModel` and `Field` from Pydantic to validate the evaluation response.
+- `load_dotenv` to load environment variables from `.env`.
+
+### 2. Load the API key and configure the model
+
+`load_dotenv()` loads values from the local `.env` file. The model is then
+created with:
+
+- Model: `gemini-3.8-flash`
+- API key: `GOOGLE_API_KEY`
+- Temperature: `1.5`
+
+Create a `.env` file in the project directory:
+
+```env
+GOOGLE_API_KEY=your_google_api_key
+```
+
+Keep the key private and never add `.env` to source control.
+
+### 3. Define the shared workflow state
+
+`BlogState` describes the information passed between nodes:
+
+```python
+class BlogState(TypedDict):
+    title: str
+    outline: str
+    content: str
+    evaluation: float
+```
+
+The title is the input. The outline, generated blog content, and evaluation
+score are filled in as the graph runs.
+
+### 4. Define the evaluation output schema
+
+The evaluator should return only a numeric score between 0 and 10:
+
+```python
+class Evaluation(BaseModel):
+    score: float = Field(ge=0, le=10)
+```
+
+This schema prevents the evaluation step from returning an invalid score or
+an unexpected response shape.
+
+### 5. Generate the blog outline
+
+The `create_outline` node:
+
+1. Reads `title` from the state.
+2. Builds a prompt asking the model for a detailed outline.
+3. Sends the prompt to Gemini.
+4. Stores the response in `state["outline"]`.
+
+### 6. Write the blog
+
+The `create_blog` node:
+
+1. Reads the title and generated outline.
+2. Prompts Gemini to write a detailed blog using that outline.
+3. Stores the response in `state["content"]`.
+
+Because this node receives the updated state from the outline node, the blog is
+written using the outline produced in the previous step.
+
+### 7. Evaluate the generated blog
+
+The `evaluation` node compares the outline and blog content. It uses
+`model.with_structured_output(Evaluation)` so the model response is parsed
+against the Pydantic schema. The resulting score is stored in
+`state["evaluation"]`.
+
+### 8. Build and compile the graph
+
+The notebook registers the three functions as graph nodes and connects them in
+order:
+
+```python
+graph.add_edge(START, "create_outline")
+graph.add_edge("create_outline", "create_blog")
+graph.add_edge("create_blog", "evaluation")
+graph.add_edge("evaluation", END)
+```
+
+`graph.compile()` converts the graph definition into an executable workflow.
+
+### 9. Run the workflow
+
+The workflow starts with a title:
+
+```python
+initial_state = {"title": "Rise of AI in India"}
+final_state = workflow.invoke(initial_state)
+```
+
+After execution, `final_state` contains the generated outline, blog content,
+and evaluation score. The final notebook cells print each value separately:
+
+```python
+print(final_state["outline"])
+print(final_state["content"])
+print(final_state["evaluation"])
+```
+
+## Setup and run
+
+### Prerequisites
+
+- Python 3.10 or later
+- A Google API key with access to the configured Gemini model
+- Jupyter Notebook or JupyterLab
+
+### Install dependencies
+
+From the project directory, create and activate a virtual environment:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+Install the project dependencies:
+
+```powershell
+pip install -r requirements.txt
+```
+
+### Run the notebook
+
+Start Jupyter:
+
+```powershell
+jupyter notebook
+```
+
+Open [`llm.ipynb`](./llm.ipynb), run the cells from top to bottom, and change
+the `title` in the input cell to generate a blog about another topic.
+
+## Important notes
+
+- The workflow makes multiple model calls, so each run may consume API quota.
+- The output is generated by an LLM and should be reviewed before publication.
+- The evaluation score is an LLM-generated assessment, not a guarantee of
+  factual accuracy or writing quality.
+- The notebook currently uses a linear graph; there are no conditional branches
+  or automatic retries.
